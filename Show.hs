@@ -8,17 +8,29 @@ data Expr = Add Expr Expr | Var
 data C = Open | X | Plus | Close
  deriving Eq 
 
-parse :: [C] -> Maybe (Expr, [C])
-parse (Open : cs) =
+atom :: [C] -> Maybe (Expr, [C])
+atom (Open : cs) =
   case parse cs of
     Just (a, Close : cs') -> Just (a, cs')
     _                     -> Nothing
 
-parse (X : cs) =
+atom (X : cs) =
   Just (Var, cs)
 
-parse _ =
+atom _ =
    Nothing
+
+parse :: [C] -> Maybe (Expr, [C])
+parse cs =
+  case atom cs of
+    Just (a, cs') ->
+      case cs' of
+        Plus : cs'' ->
+          case parse cs'' of
+            Just (b, cs''') -> Just (Add a b, cs''')
+            _               -> Just (a, cs')
+        _ -> Just (a, cs')
+    _ -> Nothing
 
 show :: Expr -> [C]
 show (Add a b) = [Open] ++ show a ++ [Plus] ++ show b ++ [Close]
