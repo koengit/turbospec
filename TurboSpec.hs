@@ -39,7 +39,7 @@ tBool = Type "Bool" (toDyn `fmap` (arbitrary :: Gen Bool)) (makeVars tBool ["B"]
         (\x y -> fromDyn x (undefined :: Bool) == fromDyn y (undefined :: Bool))
 
 tNat :: Type
-tNat = Type "Nat" (toDyn `fmap` (arbitrary `suchThat` (>=0) :: Gen Nat)) (makeVars tNat ["N"]) 
+tNat = Type "Nat" (toDyn `fmap` (arbi `suchThat` (>=0) :: Gen Nat)) (makeVars tNat ["N"]) 
        (\x y -> fromDyn x (undefined :: Nat) == fromDyn y (undefined :: Nat))
 
 tListNat :: Type
@@ -47,11 +47,11 @@ tListNat = Type "[Nat]" (toDyn `fmap` (listOf (arbitrary `suchThat` (>=0)) :: Ge
            (\x y -> fromDyn x (undefined :: [Nat]) == fromDyn y (undefined :: [Nat]))
 
 tA :: Type
-tA = Type "A" (toDyn `fmap` (arbitrary :: Gen Int)) (makeVars tA ["X"]) 
+tA = Type "A" (toDyn `fmap` (arbi :: Gen Int)) (makeVars tA ["X"]) 
        (\x y -> fromDyn x (undefined :: Int) == fromDyn y (undefined :: Int))
 
 tB :: Type
-tB = Type "B" (toDyn `fmap` (arbitrary :: Gen Int)) (makeVars tB ["Y"]) 
+tB = Type "B" (toDyn `fmap` (arbi :: Gen Int)) (makeVars tB ["Y"]) 
        (\x y -> fromDyn x (undefined :: Int) == fromDyn y (undefined :: Int))
 
 tAB :: Type
@@ -73,6 +73,8 @@ tListAB = Type "[(A,B)]" (toDyn `fmap` (listOf arbitrary :: Gen [(Int,Int)])) (m
 tListAA :: Type
 tListAA = Type "[(A,A)]" (toDyn `fmap` (listOf arbitrary :: Gen [(Int,Int)])) (makeVars tListAA ["Ps"])
            (\x y -> fromDyn x (undefined :: [(Int,Int)]) == fromDyn y (undefined :: [(Int,Int)]))
+
+arbi = choose (0,5)
 
 data Fun
   = Fun
@@ -155,7 +157,7 @@ literals tyNum funs =
   , xs <- cross [ take (tyNum t) (vars t) | t <- args p ]
   , b  <- [False,True]
   ] ++
-  [ x :=: y
+  [ x .=. y
   | t <- types
   , (x,i) <- take (tyNum t) (vars t) `zip` [1..]
   , y     <- drop i $ take (tyNum t) (vars t)
@@ -166,6 +168,9 @@ literals tyNum funs =
           | f <- funs
           , t <- args f ++ [result f]
           ]
+
+a .=. b | a > b     = b :=: a
+        | otherwise = a :=: b
 
 cross :: [[a]] -> [[a]]
 cross []       = [[]]
@@ -196,19 +201,34 @@ pre typ lit
 lit1 << lit2 = prnt lit1 < prnt lit2
  where
   prnt lit@(_:=:_)       = Nothing
-  prnt lit@((f,_):/=:_)  = Just (f, norm M.empty 0 (vec lit))
-  prnt lit@((p,_):<=>:_) = Just (p, norm M.empty 0 (vec lit))
+  prnt lit@((f,_):/=:_)  = Just (f, norm (vec lit))
+  prnt lit@((p,_):<=>:_) = Just (p, norm (vec lit))
 
-  norm tab i []     = []
-  norm tab i (x:xs) =
+swapv :: [(Var,Var)] -> Lit -> Lit
+swapv ren lit =
+  case lit of
+    x:=:y        -> sw x .=. sw y
+    (f,xs):/=: y -> (f, map sw xs) :/=: sw y
+    (p,xs):<=>:b -> (p, map sw xs) :<=>: b
+ where
+  sw z = case lookup z ren of
+           Just y  -> y
+           Nothing -> z
+
+norm :: [Var] -> [Int]
+norm xs = go M.empty 0 xs
+ where
+  go tab i []     = []
+  go tab i (x:xs) =
     case M.lookup x tab of
-      Nothing -> i : norm (M.insert x i tab) (i+1) xs
-      Just j  -> j : norm tab i xs
+      Nothing -> i : go (M.insert x i tab) (i+1) xs
+      Just j  -> j : go tab i xs
+ 
 
 type Model = ([(Fun,[Int],Int)],[(Fun,[Int],Bool)])
 
 speculate :: [Lit] -> Model -> IO (Maybe [Lit])
-speculate lits (fmod,pmod) =
+speculate lits0 (fmod,pmod) =
   withNewSolver $ \s ->
     do ls <- sequence [ newLit s | l <- lits ]
        let tab = lits `zip` ls
@@ -253,11 +273,26 @@ speculate lits (fmod,pmod) =
        -- removing symmetries
        putStrLn ("-- removing symmetries...")
        sequence_
-         [ do putStrLn (show lit1 ++ " --> " ++ fst x)
-              addClause s (neg l1 : [ l2 | (lit2,l2) <- tab, l1 /= l2, not (lit1 << lit2), x `elem` vec lit2 ])
-         | (lit1,l1) <- tab
-         , typ <- nub [ t | (_,t) <- vec lit1 ]
-         , Just x <- [pre typ lit1]
+         [ do putStrLn (show lit2 ++ " --> " ++ show (map (fst.fst) (take i ltab)))
+              ls <- sequence [ newLit s | j <- [0..i] ]
+              addClause s (neg l2 : l1 : ls)
+              sequence_
+                [ do addClause s [neg l, l1]
+                     addClause s [neg l, neg l2]
+                | (l,((_,l1),(_,l2))) <- ls `zip` ltab
+                ]
+         | x <- vs
+         , y <- vs
+         , snd x == snd y
+         , x < y
+         , let ltab = [ ((lit1,l1),(lit2,l2))
+                      | (lit1,l1) <- tab
+                      , let lit2 = swapv [(x,y),(y,x)] lit1
+                      , lit2 > lit1
+                      , (_,l2):_ <- [filter ((lit2==).fst) tab]
+                      ]
+         , i <- [0..length ltab-1]
+         , let ((lit1,l1),(lit2,l2)) = ltab !! i
          ]
 
        -- adding test cases
@@ -266,28 +301,25 @@ speculate lits (fmod,pmod) =
              do putStrLn ("(" ++ show (S.size seen) ++ " clauses)")
                 return seen
            
-           tests' seen i j sub | j >= 5*length lits =
+           tests' seen i j sub | j >= length lits =
              do tests seen i
            
            tests' seen i j sub =
              do new <- solve s (map neg cl)
                 let lits1 = [ lit | (lit@(_:/=:_),True) <- lits `zip` bs ]
-                (y,b) <- if not (null lits1) then
-                           do ((f,xs):/=:y) <- generate $ elements lits1
-                              let b = app f [ a | x <- xs, Just a <- [lookup x sub] ]
-                              return (y,b)
-                         else
-                           do y <- generate $ elements vs
-                              b <- generate (resize (i `mod` 100) (gen (snd y)))
-                              return (y,b)
-                let sub' = [ if x == y then (y,b) else (x,a) | (x,a) <- sub ]     
-                if new then
-                  do putStr "."
-                     hFlush stdout
-                     addClause s cl
-                     tests' (S.insert cl seen) 0 0 sub'
-                 else
-                  do tests' seen i (j+1) sub'
+                if not (null lits1) then
+                  do ((f,xs):/=:y) <- generate $ elements lits1
+                     let b    = app f [ a | x <- xs, Just a <- [lookup x sub] ]
+                         sub' = [ if x == y then (y,b) else (x,a) | (x,a) <- sub ]     
+                     if new then
+                       do putStr "."
+                          hFlush stdout
+                          addClause s cl
+                          tests' (S.insert cl seen) 0 0 sub'
+                      else
+                       do tests' seen i (j+1) sub'
+                  else
+                   do tests seen i
             where
              bs = [ eval sub lit | lit <- lits ]
              cl = [ l | (l,True) <- ls `zip` bs ]
@@ -373,7 +405,7 @@ speculate lits (fmod,pmod) =
          , [a] <- [[ v | (x',v) <- vtab, x' == x ]]
          , [b] <- [[ v | (y',v) <- vtab, y' == y ]]
          ]
-
+       
        -- counting literals
        n <- count s ls
 
@@ -396,8 +428,14 @@ speculate lits (fmod,pmod) =
                      loop (k+1)
        loop 1
  where
+  lits = sort lits0
   vs = nub [ v | lit <- lits, v <- vec lit ]
   ts = nub [ t | (_,t) <- vs ]
+
+  takeUntil p [] = []
+  takeUntil p (x:xs)
+    | p x        = [x]
+    | otherwise  = x : takeUntil p xs
 
 main1 =
   do c <- speculate (literals tyNum sig) (fmod,pmod)
