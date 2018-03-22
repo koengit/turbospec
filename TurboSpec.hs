@@ -246,12 +246,14 @@ speculate lits0 (fmod,pmod) =
          ]
 
        -- no unused definitions
+       {-
        sequence_
          [ addClause s (neg l1 : [ l2 | (lit2,l2) <- tab, l1 /= l2, y `elem` vec lit2 ])
          | ((_,xs):/=:y,l1) <- tab
          , y `notElem` xs
          ]
-
+       -}
+       
        -- no twice definitions
        sequence_
          [ addClause s [neg l1, neg l2]
@@ -262,6 +264,7 @@ speculate lits0 (fmod,pmod) =
          ]
 
        -- no free variables in equations
+       {-
        sequence_
          [ do addClause s (neg l1 : [ l2 | (lit2,l2) <- tab, notEq lit2, x `elem` vec lit2 ])
               addClause s (neg l1 : [ l2 | (lit2,l2) <- tab, notEq lit2, y `elem` vec lit2 ])
@@ -269,7 +272,8 @@ speculate lits0 (fmod,pmod) =
          , let notEq (_:=:_) = False
                notEq _       = True
          ]
-
+       -}
+       
        -- removing symmetries
        putStrLn ("-- removing symmetries...")
        sequence_
@@ -297,7 +301,7 @@ speculate lits0 (fmod,pmod) =
 
        -- adding test cases
        putStrLn ("-- adding test cases...")
-       let tests' seen i j sub | i >= 300 =
+       let tests' seen i j sub | i >= 500 =
              do putStrLn ("(" ++ show (S.size seen) ++ " clauses)")
                 return seen
            
@@ -325,8 +329,8 @@ speculate lits0 (fmod,pmod) =
              cl = [ l | (l,True) <- ls `zip` bs ]
            
            tests seen i =
-             do putStr "#"
-                hFlush stdout
+             do --putStr "#"
+                --hFlush stdout
                 as <- sequence [ generate (resize (i `mod` 100) (gen t)) | (_,t) <- vs ]
                 tests' seen (i+1) 0 (vs `zip` as)
            
@@ -373,6 +377,7 @@ speculate lits0 (fmod,pmod) =
          ]
        let vtab = vs `zip` vals
 
+       -- {-
        sequence_
          [ do cs <- sequence [ newLit s | c <- cases ]
               addClause s (neg l : cs)
@@ -405,6 +410,7 @@ speculate lits0 (fmod,pmod) =
          , [a] <- [[ v | (x',v) <- vtab, x' == x ]]
          , [b] <- [[ v | (y',v) <- vtab, y' == y ]]
          ]
+       -- -}
        
        -- counting literals
        n <- count s ls
